@@ -3,7 +3,19 @@ const puppeteer = require('puppeteer');
 class BrowserService {
 
     static getBrowser() {
-        return puppeteer.launch({});
+        return puppeteer.launch({
+            headless: 'new',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-extensions'
+            ]
+        });
     }
 
     static closeBrowser(browser) {
