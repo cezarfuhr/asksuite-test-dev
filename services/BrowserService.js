@@ -4,17 +4,16 @@ class BrowserService {
 
     static getBrowser() {
         return puppeteer.launch({
-            headless: 'new',
+            headless: true,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
-                '--no-first-run',
-                '--no-zygote',
-                '--single-process',
                 '--disable-extensions'
-            ]
+            ],
+            ignoreHTTPSErrors: true
         });
     }
 

@@ -11,7 +11,7 @@ RUN apk add --no-cache \
 
 # Definir Chromium como executável do Puppeteer
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Criar diretório da aplicação
 WORKDIR /app
