@@ -23,6 +23,7 @@ export interface ScrapeResult {
     provider: 'puppeteer' | 'playwright';
     executionTime: number;
     timestamp: string;
+    warnings?: string[];
   };
 }
 

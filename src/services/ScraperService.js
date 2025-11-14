@@ -45,49 +45,160 @@ class ScraperService {
             // Aguardar página carregar completamente
             await page.waitForTimeout(5000);
 
-            // Extrair dados dos quartos (adaptado para estrutura real do FastHotel)
+            // Capturar alertas/avisos da página
+            const warnings = await page.evaluate(() => {
+                const warnings = [];
+                const seen = new Set();
+                const alerts = document.querySelectorAll('.alert.alert-warning, .alert-warning, .alert.alert-danger, .alert-danger');
+
+                // Palavras-chave que identificam alertas relevantes
+                const relevantKeywords = [
+                    'fechado',
+                    'indisponível',
+                    'não disponível',
+                    'esgotado',
+                    'estadia mínima',
+                    'modifique sua busca',
+                    'sistema de reserva'
+                ];
+
+                alerts.forEach(alert => {
+                    const alertText = alert.textContent?.trim() || '';
+                    if (alertText) {
+                        // Remover caracteres extras como ×
+                        const cleanText = alertText.replace(/×/g, '').replace(/\s+/g, ' ').trim();
+
+                        // Verificar se o alerta é relevante
+                        const isRelevant = relevantKeywords.some(keyword =>
+                            cleanText.toLowerCase().includes(keyword.toLowerCase())
+                        );
+
+                        // Adicionar apenas se relevante, não vazio, não muito curto, e não duplicado
+                        if (isRelevant && cleanText.length > 15 && !seen.has(cleanText)) {
+                            warnings.push(cleanText);
+                            seen.add(cleanText);
+                        }
+                    }
+                });
+
+                return warnings;
+            });
+
+            if (warnings.length > 0) {
+                console.log(`⚠️  Avisos encontrados na página:`);
+                warnings.forEach(w => console.log(`   - ${w}`));
+            }
+
+            // Extrair dados dos quartos (estrutura Bootstrap Cards do FastHotel)
             const rooms = await page.evaluate(() => {
                 const results = [];
 
-                // Buscar tipos de acomodação/quartos
-                // FastHotel usa estrutura com data-tipo-acomodacao-codigo
-                const tipoElements = document.querySelectorAll('[data-tipo-acomodacao-codigo]');
+                // FastHotel usa Bootstrap cards com data-codigo e data-tipo
+                const cardElements = document.querySelectorAll('.card.mb-4.shadow[data-codigo]');
 
-                if (tipoElements.length > 0) {
-                    tipoElements.forEach((element, index) => {
+                if (cardElements.length > 0) {
+                    cardElements.forEach((card, index) => {
                         try {
-                            // Nome do tipo
-                            const nomeEl = element.querySelector('[data-campo="nome"], h3, h4, strong, .titulo');
-                            const name = nomeEl?.textContent?.trim() || `Tipo de Acomodação ${index + 1}`;
+                            // Nome do pacote/quarto (dentro de card-title)
+                            const titleEl = card.querySelector('.card-title, h4');
+                            const name = titleEl?.textContent?.trim() || `Acomodação ${index + 1}`;
 
-                            // Descrição
-                            const descEl = element.querySelector('[data-campo="descricao"], .descricao, p');
+                            // Descrição (dentro de card-text)
+                            const descEl = card.querySelector('.card-text, p');
                             const description = descEl?.textContent?.trim() || '';
 
-                            // Preço
-                            const priceEl = element.querySelector('[data-campo="valor"], .valor, .price');
-                            const price = priceEl?.textContent?.trim() || '';
+                            // Preço ou mensagem de disponibilidade (múltiplos seletores)
+                            let price = '';
+                            const priceSelectors = [
+                                '.price-value',
+                                '.valor',
+                                '.card-price',
+                                '[data-price]',
+                                '[data-campo="valor"]',
+                                'span[class*="price"]',
+                                'strong[class*="price"]',
+                                '.btn-primary', // Botões podem conter "fechado para venda"
+                                '.alert', // Alertas de disponibilidade
+                                '.availability-message',
+                                '.status-message'
+                            ];
 
-                            // Imagem
-                            const imgEl = element.querySelector('img');
-                            const image = imgEl?.src || imgEl?.getAttribute('data-src') || '';
+                            for (const sel of priceSelectors) {
+                                const priceEl = card.querySelector(sel);
+                                if (priceEl && priceEl.textContent.trim()) {
+                                    price = priceEl.textContent.trim();
+                                    break;
+                                }
+                            }
 
-                            if (name && price) {
-                                results.push({ name, description, price, image });
+                            // Se não encontrou, procura por mensagens de status ou preços no texto
+                            if (!price) {
+                                const cardText = card.textContent || '';
+
+                                // Primeiro, procura por mensagens de indisponibilidade
+                                const statusPatterns = [
+                                    /fechado\s+para\s+venda/i,
+                                    /indisponível/i,
+                                    /não\s+disponível/i,
+                                    /esgotado/i,
+                                    /sold\s+out/i
+                                ];
+
+                                for (const pattern of statusPatterns) {
+                                    const match = cardText.match(pattern);
+                                    if (match) {
+                                        price = match[0];
+                                        break;
+                                    }
+                                }
+
+                                // Se não encontrou status, procura por preço em R$
+                                if (!price) {
+                                    const priceMatch = cardText.match(/R\$\s*[\d.,]+/);
+                                    price = priceMatch ? priceMatch[0] : '';
+                                }
+                            }
+
+                            // Imagem (pode estar como background-image ou img tag)
+                            let image = '';
+                            const imgEl = card.querySelector('img, .card-image img');
+                            if (imgEl && imgEl.src) {
+                                image = imgEl.src;
+                            } else {
+                                // Tentar pegar background-image
+                                const cardImage = card.querySelector('.card-image');
+                                if (cardImage) {
+                                    const bgImage = window.getComputedStyle(cardImage).backgroundImage;
+                                    const urlMatch = bgImage.match(/url\(['"]?([^'"]+)['"]?\)/);
+                                    image = urlMatch ? urlMatch[1] : '';
+                                }
+                            }
+
+                            // Adiciona apenas se tiver pelo menos nome
+                            if (name && name !== 'Acomodação 1') {
+                                results.push({
+                                    name,
+                                    description,
+                                    price: price || 'Consultar disponibilidade',
+                                    image
+                                });
                             }
                         } catch (err) {
-                            console.error(`Erro extraindo elemento ${index}:`, err.message);
+                            console.error(`Erro extraindo card ${index}:`, err.message);
                         }
                     });
                 }
 
-                // Fallback: buscar por estrutura genérica de quartos
+                // Fallback: estrutura alternativa
                 if (results.length === 0) {
-                    const quartoEls = document.querySelectorAll('[class*="quarto"], [class*="tipo"]');
-                    quartoEls.forEach((el, idx) => {
-                        const name = el.querySelector('h3, h4, strong')?.textContent?.trim() || `Quarto ${idx + 1}`;
-                        const desc = el.querySelector('.descricao, p')?.textContent?.trim() || '';
-                        const price = el.querySelector('[data-campo="valor"]')?.textContent?.trim() || 'Sob consulta';
+                    console.log('Usando fallback: procurando por estrutura alternativa');
+                    const alternativeCards = document.querySelectorAll('article.room, .room-card, .tipo-acomodacao');
+
+                    alternativeCards.forEach((el, idx) => {
+                        const name = el.querySelector('h2, h3, h4, .room-title')?.textContent?.trim() || `Quarto ${idx + 1}`;
+                        const desc = el.querySelector('.description, .room-description, p')?.textContent?.trim() || '';
+                        const priceEl = el.querySelector('.price, .room-price, [data-price]');
+                        const price = priceEl?.textContent?.trim() || el.textContent.match(/R\$\s*[\d.,]+/)?.[0] || 'Consultar';
                         const img = el.querySelector('img')?.src || '';
 
                         if (name) {
