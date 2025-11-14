@@ -12,8 +12,16 @@ const isValidDateFormat = (dateString) => {
     const regex = /^\d{4}-\d{2}-\d{2}$/;
     if (!regex.test(dateString)) return false;
 
-    const date = new Date(dateString);
-    return date instanceof Date && !isNaN(date);
+    // Parse manualmente para evitar problemas de timezone
+    const [year, month, day] = dateString.split('-').map(Number);
+
+    // Criar data usando valores locais (não UTC)
+    const date = new Date(year, month - 1, day);
+
+    // Verificar se a data criada corresponde aos valores fornecidos
+    return date.getFullYear() === year &&
+           date.getMonth() === month - 1 &&
+           date.getDate() === day;
 };
 
 /**

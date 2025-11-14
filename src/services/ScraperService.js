@@ -6,9 +6,9 @@ const BrowserService = require('../../services/BrowserService');
  */
 class ScraperService {
     /**
-     * URL base para scraping (atualizada para novo domínio)
+     * URL base para scraping
      */
-    static BASE_URL = 'https://reservations3.fasthotel.com.br/188/214';
+    static BASE_URL = 'https://reservations.fasthotel.me/188/214';
 
     /**
      * Realiza scraping de quartos disponíveis

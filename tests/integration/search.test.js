@@ -3,12 +3,20 @@ const express = require('express');
 const router = require('../../routes/router');
 
 // Mock das dependências externas
-jest.mock('../../config/database', () => ({
-    pool: {
-        query: jest.fn()
-    },
-    checkConnection: jest.fn().mockResolvedValue(true)
-}));
+jest.mock('../../config/database', () => {
+    const mockClient = {
+        query: jest.fn().mockResolvedValue({ rows: [] }),
+        release: jest.fn()
+    };
+
+    return {
+        pool: {
+            query: jest.fn().mockResolvedValue({ rows: [{ id: 1 }] }),
+            connect: jest.fn().mockResolvedValue(mockClient)
+        },
+        checkConnection: jest.fn().mockResolvedValue(true)
+    };
+});
 
 jest.mock('../../config/redis', () => ({
     connectRedis: jest.fn().mockResolvedValue(true),
@@ -40,6 +48,11 @@ jest.mock('../../src/services/ScraperService', () => ({
 const app = express();
 app.use(express.json());
 app.use('/', router);
+
+// Adicionar middlewares de erro
+const { errorHandler, notFoundHandler } = require('../../src/middlewares/errorHandler');
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 describe('Search API Integration Tests', () => {
     describe('GET /', () => {
