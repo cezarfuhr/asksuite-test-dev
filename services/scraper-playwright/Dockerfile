@@ -10,6 +10,7 @@ COPY services/scraper-playwright/package*.json ./
 RUN npm install
 
 COPY services/scraper-playwright/src ./src
+COPY config ./config
 COPY services/scraper-playwright/tsconfig.json ./
 
 # Build TypeScript

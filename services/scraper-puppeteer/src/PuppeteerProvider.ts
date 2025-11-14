@@ -1,8 +1,8 @@
 import puppeteer, { Browser, Page } from 'puppeteer';
-import { IScraperProvider, ScrapeParams, ScrapeResult, RoomData, HealthStatus } from '../shared/types/scraper.interface';
+import { IScraperProvider, ScrapeParams, ScrapeResult, RoomData, HealthStatus, SiteConfig } from '../shared/types/site-config.interface';
+import { getSiteConfig, isSiteConfigured, isSiteEnabled, getMockRoomsForSite } from '../config/sites';
 
 export class PuppeteerProvider implements IScraperProvider {
-  private static BASE_URL = 'https://reservations3.fasthotel.com.br/188/214';
   private browser: Browser | null = null;
 
   getName(): string {
@@ -30,40 +30,61 @@ export class PuppeteerProvider implements IScraperProvider {
 
   async scrape(params: ScrapeParams): Promise<ScrapeResult> {
     const startTime = Date.now();
+    const siteId = params.site || 'fasthotel';  // Default to fasthotel for backward compatibility
+
+    console.log(`[Puppeteer] 🔍 Starting scrape for site: ${siteId}`);
+
+    // Check if site is configured
+    if (!isSiteConfigured(siteId)) {
+      return this.createErrorResponse(
+        'SITE_NOT_CONFIGURED',
+        `Site "${siteId}" is not configured. Please add configuration in config/sites/${siteId}.config.ts`,
+        siteId
+      );
+    }
+
+    // Load site configuration
+    const config = getSiteConfig(siteId);
+    console.log(`[Puppeteer] 📋 Loaded config for: ${config.name}`);
+
+    // Check if site is enabled (implemented)
+    if (!isSiteEnabled(siteId)) {
+      console.log(`[Puppeteer] ⚠️  Site "${siteId}" is not enabled, returning mock data`);
+      return this.createMockResponse(siteId, config, startTime);
+    }
+
+    // Real scraping for enabled sites
     let browser: Browser | null = null;
 
     try {
-      const url = this.buildSearchUrl(params);
-      console.log(`[Puppeteer] 🔍 Starting scraping for: ${url}`);
+      const url = config.urlBuilder(params);
+      console.log(`[Puppeteer] 🌐 URL: ${url}`);
 
-      browser = await this.launchBrowser();
+      browser = await this.launchBrowser(config);
       const page = await browser.newPage();
 
-      await page.setViewport({ width: 1920, height: 1080 });
-      await page.setDefaultNavigationTimeout(60000);
-      await page.setUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-      );
+      await this.configurePage(page, config);
 
       await page.goto(url, {
         waitUntil: 'networkidle2',
-        timeout: 60000
+        timeout: config.settings?.timeout || 60000
       });
 
-      await page.waitForTimeout(5000);
+      await page.waitForTimeout(config.settings?.waitTime || 5000);
 
-      // Capturar alertas/avisos da página
+      // Extract warnings and rooms using site config
       console.log('[Puppeteer] 🔍 Extracting warnings...');
-      const warnings = await this.extractWarnings(page);
-      console.log(`[Puppeteer] 📊 extractWarnings returned array with ${warnings.length} items`);
+      const warnings = await this.extractWarnings(page, config);
+      console.log(`[Puppeteer] 📊 Found ${warnings.length} warnings`);
+
       if (warnings.length > 0) {
-        console.log(`[Puppeteer] ⚠️  Found ${warnings.length} warnings on page:`);
+        console.log(`[Puppeteer] ⚠️  Warnings:`);
         warnings.forEach((w, i) => console.log(`  ${i + 1}. ${w}`));
-      } else {
-        console.log('[Puppeteer] ℹ️  No warnings found');
       }
 
-      const rooms = await this.extractRooms(page);
+      console.log('[Puppeteer] 🔍 Extracting rooms...');
+      const rooms = await this.extractRooms(page, config);
+
       await browser.close();
 
       const executionTime = Date.now() - startTime;
@@ -74,6 +95,7 @@ export class PuppeteerProvider implements IScraperProvider {
         data: rooms,
         meta: {
           provider: 'puppeteer',
+          site: siteId,
           executionTime,
           timestamp: new Date().toISOString(),
           warnings: warnings.length > 0 ? warnings : undefined
@@ -81,7 +103,7 @@ export class PuppeteerProvider implements IScraperProvider {
       };
 
     } catch (error: any) {
-      console.error('[Puppeteer] ❌ Scraping error:', error);
+      console.error(`[Puppeteer] ❌ Scraping error for ${config.name}:`, error);
 
       if (browser) {
         await browser.close().catch(() => {});
@@ -98,186 +120,196 @@ export class PuppeteerProvider implements IScraperProvider {
     }
   }
 
-  private async launchBrowser(): Promise<Browser> {
+  private async launchBrowser(config?: SiteConfig): Promise<Browser> {
+    const args = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--disable-extensions'
+    ];
+
+    // Add stealth mode if configured
+    if (config?.settings?.antiBot) {
+      args.push('--disable-blink-features=AutomationControlled');
+    }
+
     return puppeteer.launch({
       headless: true,
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-extensions'
-      ],
+      args,
       ignoreHTTPSErrors: true
     });
   }
 
-  private buildSearchUrl(params: ScrapeParams): string {
-    const adults = params.adults || 1;
-    return `${PuppeteerProvider.BASE_URL}?entrada=${params.checkin}&saida=${params.checkout}&adultos=${adults}#acomodacoes`;
+  private async configurePage(page: Page, config: SiteConfig): Promise<void> {
+    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setDefaultNavigationTimeout(config.settings?.timeout || 60000);
+
+    // Set user agent
+    const userAgent = config.settings?.userAgent ||
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36';
+    await page.setUserAgent(userAgent);
+
+    // Anti-bot measures if enabled
+    if (config.settings?.antiBot) {
+      await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+      });
+    }
   }
 
-  private async extractWarnings(page: Page): Promise<string[]> {
-    return await page.evaluate(() => {
+  private async extractWarnings(page: Page, config: SiteConfig): Promise<string[]> {
+    if (!config.selectors.warnings || config.selectors.warnings.length === 0) {
+      return [];
+    }
+
+    const warningSelectors = config.selectors.warnings;
+
+    return await page.evaluate((selectors) => {
       const warnings: string[] = [];
       const seen = new Set<string>();
 
-      // Capturar alertas de aviso da página
-      const alerts = document.querySelectorAll('.alert.alert-warning, .alert-warning, .alert.alert-danger, .alert-danger');
-
-      alerts.forEach(alert => {
-        const alertText = alert.textContent?.trim() || '';
-        if (alertText) {
-          // Remover caracteres extras como ×  e espaços múltiplos
-          const cleanText = alertText.replace(/×/g, '').replace(/\s+/g, ' ').trim();
-
-          // Filtrar apenas alertas relevantes (que contêm palavras-chave)
-          const relevantKeywords = [
-            'fechado',
-            'indisponível',
-            'não disponível',
-            'esgotado',
-            'estadia mínima',
-            'modifique sua busca',
-            'sistema de reserva'
-          ];
-
-          const isRelevant = relevantKeywords.some(keyword =>
-            cleanText.toLowerCase().includes(keyword.toLowerCase())
-          );
-
-          // Adicionar apenas se relevante, não vazio, não muito curto, e não duplicado
-          if (isRelevant && cleanText.length > 15 && !seen.has(cleanText)) {
-            warnings.push(cleanText);
-            seen.add(cleanText);
+      selectors.forEach((selector: string) => {
+        const elements = document.querySelectorAll(selector);
+        elements.forEach(el => {
+          const text = el.textContent?.trim().replace(/×/g, '').replace(/\s+/g, ' ').trim();
+          if (text && text.length > 15 && !seen.has(text)) {
+            warnings.push(text);
+            seen.add(text);
           }
-        }
+        });
       });
 
       return warnings;
-    });
+    }, warningSelectors);
   }
 
-  private async extractRooms(page: Page): Promise<RoomData[]> {
-    const rooms = await page.evaluate(() => {
+  private async extractRooms(page: Page, config: SiteConfig): Promise<RoomData[]> {
+    const sel = config.selectors;
+    const parsers = config.parsers;
+
+    const rooms = await page.evaluate(({ selectors, parsersStr }) => {
       const results: any[] = [];
+      const cards = document.querySelectorAll(selectors.roomCard);
 
-      // FastHotel usa Bootstrap cards com data-codigo e data-tipo
-      const cardElements = document.querySelectorAll('.card.mb-4.shadow[data-codigo]');
+      console.log(`Found ${cards.length} room cards with selector: ${selectors.roomCard}`);
 
-      if (cardElements.length > 0) {
-        cardElements.forEach((card, index) => {
-          try {
-            // Nome do pacote/quarto (dentro de card-title)
-            const titleEl = card.querySelector('.card-title, h4');
-            const name = titleEl?.textContent?.trim() || `Acomodação ${index + 1}`;
+      cards.forEach((card, index) => {
+        try {
+          // Extract name
+          const nameEl = card.querySelector(selectors.roomName);
+          let name = nameEl?.textContent?.trim() || `Room ${index + 1}`;
 
-            // Descrição (dentro de card-text)
-            const descEl = card.querySelector('.card-text, p, [data-campo="descricao"], .descricao');
-            const description = descEl?.textContent?.trim() || '';
+          // Extract description
+          const descEl = card.querySelector(selectors.roomDescription);
+          let description = descEl?.textContent?.trim() || '';
 
-            // Preço ou mensagem de disponibilidade (procurar por múltiplos seletores)
-            let price = '';
-            const priceSelectors = [
-              '.price-value',
-              '.valor',
-              '.card-price',
-              '[data-price]',
-              '[data-campo="valor"]',
-              'span[class*="price"]',
-              'strong[class*="price"]',
-              '.btn-primary', // Botões podem conter texto como "fechado para venda"
-              '.alert', // Mensagens de alerta
-              '.availability-message'
-            ];
+          // Extract price (try multiple selectors)
+          let price = '';
+          const priceSelectors = selectors.roomPrice.split(',').map((s: string) => s.trim());
 
-            for (const sel of priceSelectors) {
-              const priceEl = card.querySelector(sel);
-              if (priceEl && priceEl.textContent?.trim()) {
-                price = priceEl.textContent.trim();
-                break;
-              }
+          for (const priceSel of priceSelectors) {
+            const priceEl = card.querySelector(priceSel);
+            if (priceEl && priceEl.textContent?.trim()) {
+              price = priceEl.textContent.trim();
+              break;
             }
+          }
 
-            // Se não encontrou, procura por padrão R$ ou mensagens de status no texto
-            if (!price) {
-              const cardText = card.textContent || '';
-              // Procura por "fechado para venda" ou similar
-              const closedMatch = cardText.match(/(fechado|indisponível|não disponível|esgotado)/i);
-              if (closedMatch) {
-                price = closedMatch[0];
-              } else {
-                // Procura por valores em R$
-                const priceMatch = cardText.match(/R\$\s*[\d.,]+/);
-                price = priceMatch ? priceMatch[0] : 'Consultar disponibilidade';
-              }
-            }
-
-            // Imagem (pode estar como src, data-src ou background-image)
-            const imgEl = card.querySelector('img, .card-image img');
-            let image = '';
-            if (imgEl) {
-              image = (imgEl as HTMLImageElement)?.src || imgEl?.getAttribute('data-src') || '';
+          // Fallback: search for price patterns in card text
+          if (!price) {
+            const cardText = card.textContent || '';
+            const closedMatch = cardText.match(/(fechado|indisponível|não disponível|esgotado)/i);
+            if (closedMatch) {
+              price = closedMatch[0];
             } else {
-              // Tentar pegar background-image
-              const cardImage = card.querySelector('.card-image');
-              if (cardImage) {
-                const bgImage = window.getComputedStyle(cardImage).backgroundImage;
-                const urlMatch = bgImage.match(/url\(['"]?([^'"]+)['"]?\)/);
-                image = urlMatch ? urlMatch[1] : '';
-              }
+              const priceMatch = cardText.match(/R\$\s*[\d.,]+|US\$\s*[\d.,]+|\$\s*[\d.,]+/);
+              price = priceMatch ? priceMatch[0] : 'Consultar disponibilidade';
             }
+          }
 
-            if (name && price) {
-              results.push({ name, description, price, image });
+          // Apply custom price parser if exists
+          if (parsersStr?.price && price) {
+            try {
+              const parserFunc = eval(`(${parsersStr.price})`);
+              price = parserFunc(price);
+            } catch (e) {
+              console.error('Error applying price parser:', e);
             }
-          } catch (err: any) {
-            console.error(`Erro extraindo elemento ${index}:`, err.message);
           }
-        });
-      }
 
-      if (results.length === 0) {
-        const quartoEls = document.querySelectorAll('[class*="quarto"], [class*="tipo"]');
-        quartoEls.forEach((el, idx) => {
-          const name = el.querySelector('h3, h4, strong')?.textContent?.trim() || `Quarto ${idx + 1}`;
-          const desc = el.querySelector('.descricao, p')?.textContent?.trim() || '';
-          const price = el.querySelector('[data-campo="valor"]')?.textContent?.trim() || 'Sob consulta';
-          const img = (el.querySelector('img') as HTMLImageElement)?.src || '';
-
-          if (name) {
-            results.push({ name, description: desc, price, image: img });
+          // Extract image
+          const imgEl = card.querySelector(selectors.roomImage);
+          let image = '';
+          if (imgEl) {
+            image = (imgEl as HTMLImageElement)?.src || imgEl?.getAttribute('data-src') || '';
+          } else {
+            // Try background-image
+            const cardImage = card.querySelector('.card-image');
+            if (cardImage) {
+              const bgImage = window.getComputedStyle(cardImage).backgroundImage;
+              const urlMatch = bgImage.match(/url\(['"]?([^'"]+)['"]?\)/);
+              image = urlMatch ? urlMatch[1] : '';
+            }
           }
-        });
-      }
+
+          if (name && price) {
+            results.push({ name, description, price, image });
+          }
+        } catch (err: any) {
+          console.error(`Error extracting room ${index}:`, err.message);
+        }
+      });
 
       return results;
-    });
+    }, { selectors: sel, parsersStr: parsers }) as RoomData[];
 
     if (rooms.length === 0) {
-      console.log('[Puppeteer] ⚠️  No rooms found, using fallback data');
-      return this.getFallbackRooms();
+      console.log('[Puppeteer] ⚠️  No rooms found with configured selectors');
     }
 
     return rooms;
   }
 
-  private getFallbackRooms(): RoomData[] {
-    return [
-      {
-        name: 'STUDIO CASAL',
-        description: 'Apartamentos localizados no prédio principal do Resort, próximos a recepção e a área de convivência, com vista para área de estacionamento não possuem varanda. Acomoda até 1 adulto e 1 criança ou 2 adultos',
-        price: 'R$ 1.092,00',
-        image: 'https://s3.sa-east-1.amazonaws.com/fasthotel.cdn/quartosTipo/214-1-1632320429599483292-thumb.jpg'
-      },
-      {
-        name: 'CABANA',
-        description: 'Apartamentos espalhados pelos jardins do Resort, com vista jardim possuem varanda. Acomoda até 4 adultos ou 3 adultos e 1 criança ou 2 adultos e 2 criança ou 1 adulto e 3 crianças, em duas camas casal.',
-        price: 'R$ 1.321,00',
-        image: 'https://s3.sa-east-1.amazonaws.com/fasthotel.cdn/quartosTipo/214-2-1632320443599483294-thumb.jpg'
+  private createMockResponse(siteId: string, config: SiteConfig, startTime: number): ScrapeResult {
+    const executionTime = Date.now() - startTime;
+    const mockRooms = getMockRoomsForSite(siteId);
+
+    return {
+      success: true,
+      data: mockRooms,
+      meta: {
+        provider: 'puppeteer',
+        site: siteId,
+        executionTime,
+        timestamp: new Date().toISOString(),
+        warnings: [
+          `⚠️ MOCK DATA - Site "${config.name}" is not yet enabled.`,
+          `To enable: Set enabled: true in config/sites/${siteId}.config.ts and verify selectors are correct.`
+        ],
+        mock: true
       }
-    ];
+    };
+  }
+
+  private createErrorResponse(code: string, message: string, siteId?: string): ScrapeResult {
+    return {
+      success: false,
+      error: {
+        code: code as any,
+        message,
+        provider: 'puppeteer'
+      },
+      meta: {
+        provider: 'puppeteer',
+        site: siteId,
+        executionTime: 0,
+        timestamp: new Date().toISOString()
+      }
+    };
   }
 
   private getErrorCode(error: any): 'SCRAPING_FAILED' | 'TIMEOUT' | 'BROWSER_CRASH' | 'VALIDATION_ERROR' {

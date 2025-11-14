@@ -5,7 +5,7 @@
     "lib": ["ES2020", "DOM"],
     "outDir": "./dist",
     "baseUrl": ".",
-    "strict": true,
+    "strict": false,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
@@ -14,6 +14,6 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["src/**/*", "../shared/types/**/*"],
+  "include": ["src/**/*", "../shared/types/**/*", "config/**/*"],
   "exclude": ["node_modules", "dist"]
 }

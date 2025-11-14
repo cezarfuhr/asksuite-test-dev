@@ -8,7 +8,7 @@ const orchestrator = new ProviderOrchestrator();
 
 app.post('/search', async (req: Request, res: Response) => {
   try {
-    const { checkin, checkout, adults } = req.body;
+    const { site, checkin, checkout, adults } = req.body;
 
     if (!checkin || !checkout) {
       return res.status(400).json({
@@ -20,7 +20,7 @@ app.post('/search', async (req: Request, res: Response) => {
       });
     }
 
-    const result = await orchestrator.scrape({ checkin, checkout, adults });
+    const result = await orchestrator.scrape({ site, checkin, checkout, adults });
 
     if (result.success) {
       res.json(result);

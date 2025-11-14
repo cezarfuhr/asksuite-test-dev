@@ -23,6 +23,7 @@ COPY services/scraper-puppeteer/package*.json ./
 RUN npm install
 
 COPY services/scraper-puppeteer/src ./src
+COPY config ./config
 COPY services/scraper-puppeteer/tsconfig.json ./
 
 # Build TypeScript

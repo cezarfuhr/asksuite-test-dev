@@ -8,7 +8,7 @@ const provider = new PlaywrightProvider();
 
 app.post('/scrape', async (req: Request, res: Response) => {
   try {
-    const { checkin, checkout, adults } = req.body;
+    const { site, checkin, checkout, adults } = req.body;
 
     if (!checkin || !checkout) {
       return res.status(400).json({
@@ -20,7 +20,7 @@ app.post('/scrape', async (req: Request, res: Response) => {
       });
     }
 
-    const result = await provider.scrape({ checkin, checkout, adults });
+    const result = await provider.scrape({ site, checkin, checkout, adults });
 
     if (result.success) {
       res.json(result);

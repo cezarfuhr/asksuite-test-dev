@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { CircuitBreaker } from './CircuitBreaker';
-import { ScrapeParams, ScrapeResult } from '../shared/types/scraper.interface';
+import { ScrapeParams, ScrapeResult } from '../shared/types/site-config.interface';
 
 export interface ProviderConfig {
   name: string;
